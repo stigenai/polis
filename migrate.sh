@@ -1,7 +1,7 @@
 #!/bin/sh
 
 echo "Initiating Migration..."
-export NODE_PATH=$(npm root -g)
+export NODE_PATH="${NODE_PATH:-/usr/local/lib/node_modules}"
 
 cd ./npm
 if [ "$DB_ENGINE" = "mongo" ]
@@ -23,4 +23,3 @@ fi
 echo "Migration Finished..."
 
 cd ..
-
