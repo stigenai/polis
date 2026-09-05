@@ -99,7 +99,9 @@ function stubRandomBytesAll() {
     .returns(iv as any);
 }
 
-async function issueSamlAuthorizationCode(authBody: OAuthReq = authz_request_normal): Promise<string> {
+async function issueSamlAuthorizationCode(
+  authBody: OAuthReq = authz_request_normal as OAuthReq
+): Promise<string> {
   const { redirect_url } = (await oauthController.authorize(authBody)) as { redirect_url: string };
   const relayState = new URLSearchParams(new URL(redirect_url).search).get('RelayState');
   const rawResponse = await fs.readFile(path.join(__dirname, '/data/saml_response'), 'utf8');
@@ -110,6 +112,7 @@ async function issueSamlAuthorizationCode(authBody: OAuthReq = authz_request_nor
     sessionIndex: '',
   });
   try {
+    if (!relayState) throw new Error('authorization response omitted RelayState');
     const response = await oauthController.samlResponse({
       SAMLResponse: rawResponse,
       RelayState: relayState,
@@ -441,7 +444,8 @@ tap.test('token()', async (t) => {
     const issuedCode = await issueSamlAuthorizationCode();
     const request = <OAuthTokenReq>{ ...token_req_encoded_client_id, code: issuedCode };
 
-    await t.rejects(oauthController.token({ ...request, client_secret: 'wrong-secret' }), {
+    await t.rejects(oauthController.token({ ...request, client_secret: 'wrong-secret' } as OAuthTokenReq), {
+      message: 'Invalid client_secret',
       statusCode: 401,
     });
     const response = await oauthController.token(request);
@@ -455,7 +459,8 @@ tap.test('token()', async (t) => {
     const controller = oauthController as any;
     const originalTake = controller.codeStore.take.bind(controller.codeStore);
     const tokenPut = sinon.spy(controller.tokenStore, 'put');
-    const take = sinon.stub(controller.codeStore, 'take').callsFake(async (key: string) => {
+    const take = sinon.stub(controller.codeStore, 'take').callsFake(async (key: unknown) => {
+      if (typeof key !== 'string') throw new TypeError('authorization code key must be a string');
       const stored = await controller.codeStore.get(key);
       const cleartext = encrypter.decrypt(stored.value, stored.iv, stored.tag, Buffer.from(hexKey, 'hex'));
       const replacement = JSON.parse(cleartext);
@@ -482,7 +487,8 @@ tap.test('token()', async (t) => {
     const controller = oauthController as any;
     const originalTake = controller.codeStore.take.bind(controller.codeStore);
     const tokenPut = sinon.spy(controller.tokenStore, 'put');
-    const take = sinon.stub(controller.codeStore, 'take').callsFake(async (key: string) => {
+    const take = sinon.stub(controller.codeStore, 'take').callsFake(async (key: unknown) => {
+      if (typeof key !== 'string') throw new TypeError('authorization code key must be a string');
       await originalTake(key);
       throw new Error('ambiguous consume failure');
     });
