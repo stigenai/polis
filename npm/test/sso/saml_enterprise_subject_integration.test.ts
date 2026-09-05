@@ -3,6 +3,7 @@ import * as jose from 'jose';
 import saml from '@boxyhq/saml20';
 import tap from 'tap';
 
+import { JacksonError } from '../../src/controller/error';
 import { enterpriseSubject } from '../../src/controller/enterprise-subject';
 import type {
   IConnectionAPIController,
@@ -224,15 +225,19 @@ tap.test('real signed SAML callback fails closed without verified NameID format'
 });
 
 tap.test('real signed SAML callback rejects an unconfigured verified issuer', async (t) => {
-  await t.rejects(
-    completeSAMLCallback(enterpriseOAuth, enterpriseConnection, {
+  try {
+    await completeSAMLCallback(enterpriseOAuth, enterpriseConnection, {
       issuer: 'https://other-idp.example/entity',
-    }),
-    {
-      statusCode: 403,
-      internalError: 'SAML connection not found.',
+    });
+    t.fail('Expected the callback to reject an unconfigured issuer');
+  } catch (error) {
+    if (!(error instanceof JacksonError)) {
+      t.fail('Expected a JacksonError for an unconfigured issuer');
+      return;
     }
-  );
+    t.equal(error.statusCode, 403);
+    t.equal(error.internalError, 'SAML connection not found.');
+  }
 });
 
 tap.test('legacy signed SAML callback keeps the historical subject', async (t) => {

@@ -1,17 +1,7 @@
 import crypto from 'crypto';
 
-import type { OIDCSSORecord, SAMLSSORecord } from '../typings';
-
-export type EnterpriseIdentity = {
-  version: 1;
-  protocol: 'oidc' | 'saml';
-  organization: string;
-  connection: string;
-  upstreamIssuer: string;
-  upstreamSubject: string;
-  subjectFormat?: string;
-  subject: string;
-};
+import type { EnterpriseIdentity, OIDCSSORecord, SAMLSSORecord } from '../typings';
+export type { EnterpriseIdentity } from '../typings';
 
 function required(name: string, value: unknown): string {
   if (typeof value !== 'string' || value.length === 0 || value !== value.trim()) {
