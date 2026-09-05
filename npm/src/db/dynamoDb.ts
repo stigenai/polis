@@ -343,6 +343,46 @@ class DynamoDB implements DatabaseDriver {
     }
   }
 
+  async take(namespace: string, key: string): Promise<any> {
+    const dbKey = dbutils.key(namespace, key);
+    const deleted = await this.client
+      .send(
+        new DeleteItemCommand({
+          TableName: tableName,
+          Key: marshall({ namespace, key: dbKey }),
+          ConditionExpression: 'attribute_not_exists(expiresAt) OR expiresAt >= :now',
+          ExpressionAttributeValues: marshall({ ':now': getSeconds(new Date()) }),
+          ReturnValues: 'ALL_OLD',
+        })
+      )
+      .catch((err) => {
+        if (err?.name === 'ConditionalCheckFailedException') return null;
+        throw err;
+      });
+
+    if (!deleted) return null;
+    if (!deleted.Attributes) return null;
+
+    const value = unmarshall(deleted.Attributes).value;
+    const res = await this.client.send(
+      new QueryCommand({
+        KeyConditionExpression: 'storeKey = :storeKey',
+        ExpressionAttributeValues: { ':storeKey': { S: dbKey } },
+        TableName: indexTableName,
+        IndexName: globalStoreKeyIndexName,
+      })
+    );
+    for (const item of res.Items || []) {
+      await this.client.send(
+        new DeleteItemCommand({
+          TableName: indexTableName,
+          Key: marshall({ key: item.key?.S, storeKey: dbKey }),
+        })
+      );
+    }
+    return JSON.parse(value);
+  }
+
   async deleteMany(namespace: string, keys: string[]): Promise<void> {
     if (keys.length === 0) {
       return;

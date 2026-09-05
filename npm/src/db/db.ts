@@ -73,6 +73,14 @@ class DB implements DatabaseDriver {
     return decrypt(res, this.encryptionKey);
   }
 
+  async take(namespace: string, key: string): Promise<unknown> {
+    if (typeof this.db.take !== 'function') {
+      throw new Error('Database driver does not support atomic take');
+    }
+    const res = await this.db.take(namespace, key);
+    return res ? decrypt(res, this.encryptionKey) : null;
+  }
+
   async getAll(
     namespace: string,
     pageOffset?: number,

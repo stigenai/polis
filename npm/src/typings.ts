@@ -357,6 +357,7 @@ export interface DatabaseDriver {
     sortOrder?: SortOrder
   ): Promise<Records>;
   get(namespace: string, key: string): Promise<any>;
+  take?(namespace: string, key: string): Promise<any>;
   put(namespace: string, key: string, val: any, ttl: number, ...indexes: Index[]): Promise<any>;
   delete(namespace: string, key: string): Promise<any>;
   getByIndex(
@@ -381,6 +382,7 @@ export interface Storable {
     sortOrder?: SortOrder
   ): Promise<Records>;
   get(key: string): Promise<any>;
+  take(key: string): Promise<any>;
   put(key: string, val: any, ...indexes: Index[]): Promise<any>;
   delete(key: string): Promise<any>;
   getByIndex(
