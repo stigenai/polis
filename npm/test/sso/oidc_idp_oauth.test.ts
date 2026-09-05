@@ -1,11 +1,13 @@
 import tap from 'tap';
+import * as jose from 'jose';
 import * as utils from '../../src/controller/utils';
-import { IConnectionAPIController, IOAuthController, OAuthReq } from '../../src/typings';
+import { IConnectionAPIController, IOAuthController, OAuthReq, OAuthTokenReq } from '../../src/typings';
 import {
   authz_request_oidc_provider,
   GENERIC_ERR_STRING,
   oidc_response,
   oidc_response_with_error,
+  oidc_connection,
 } from './fixture';
 import { JacksonError } from '../../src/controller/error';
 import { addSSOConnections, jacksonOptions } from '../utils';
@@ -259,6 +261,32 @@ tap.test('[OIDCProvider]', async (t) => {
 
       t.ok(response_params.has('code'), 'code missing in redirect_url');
       t.match(response_params.get('state'), authz_request_oidc_provider.state);
+
+      const code = response_params.get('code')!;
+      const connection = (
+        await connectionAPIController.getConnections({
+          tenant: oidc_connection.tenant,
+          product: oidc_connection.product,
+        })
+      )[0];
+      const keyPair = await jose.generateKeyPair('RS256', { extractable: true });
+      (oauthController as any).opts.openid.jwtSigningKeys = {
+        private: Buffer.from(await jose.exportPKCS8(keyPair.privateKey)).toString('base64'),
+        public: Buffer.from(await jose.exportSPKI(keyPair.publicKey)).toString('base64'),
+      };
+      const token = await oauthController.token(<OAuthTokenReq>{
+        grant_type: 'authorization_code',
+        code,
+        client_id: connection.clientID,
+        client_secret: connection.clientSecret,
+        redirect_uri: oidc_connection.defaultRedirectUrl,
+      });
+      const bridgedProfile = await oauthController.userInfo(token.access_token);
+      t.match(bridgedProfile.sub, /^stigen-enterprise-v1\./);
+      t.equal((bridgedProfile as any).stigen_identity.upstreamIssuer, 'https://accounts.google.com');
+      t.equal((bridgedProfile as any).stigen_identity.upstreamSubject, 'USER_IDENTIFIER');
+      t.equal(bridgedProfile.raw.iss, 'https://userinfo-attacker.example.com');
+      t.equal(bridgedProfile.raw.sub, 'USERINFO_IDENTIFIER');
     }
   );
 });

@@ -17,7 +17,7 @@ const oidcConnection = (overrides: Partial<OIDCSSORecord> = {}): OIDCSSORecord =
   }) as OIDCSSORecord;
 
 const oidcProfile = (issuer = 'https://issuer.example', subject = 'subject-123') => ({
-  verifiedIdentity: { protocol: 'oidc', issuer, subject },
+  verifiedIdentity: { protocol: 'oidc', issuer, subject, configuredIssuer: issuer },
   claims: { raw: { iss: issuer, sub: subject, email: 'shared@example.com' } },
 });
 
@@ -83,6 +83,8 @@ tap.test('userinfo cannot overwrite validated OIDC provenance', (t) => {
     protocol: 'oidc',
     issuer: 'https://issuer.example',
     subject: 'validated-subject',
+    configuredIssuer: 'https://issuer.example',
+    issuerTenantID: undefined,
   });
   // Raw remains backwards-compatible profile material and demonstrates why it
   // is not an authentication provenance source.
@@ -94,11 +96,37 @@ tap.test('userinfo cannot overwrite validated OIDC provenance', (t) => {
   t.equal(identity.upstreamSubject, 'validated-subject');
   t.throws(
     () =>
-      createOIDCUserProfile(
-        { iss: 'https://issuer.example/', sub: 'validated-subject' },
-        {},
-        'https://issuer.example'
+      buildEnterpriseIdentity(
+        oidcConnection(),
+        createOIDCUserProfile(
+          { iss: 'https://issuer.example/', sub: 'validated-subject' },
+          {},
+          'https://issuer.example'
+        )
       ),
+    /does not match/
+  );
+  t.end();
+});
+
+tap.test('OIDC issuer templates resolve exactly as validated provider metadata', (t) => {
+  const tenantID = '11111111-2222-3333-4444-555555555555';
+  const profile = createOIDCUserProfile(
+    {
+      iss: `https://login.microsoftonline.com/${tenantID}/v2.0`,
+      sub: 'entra-subject',
+      tid: tenantID,
+    },
+    {},
+    'https://login.microsoftonline.com/{tenantid}/v2.0'
+  );
+  t.match(buildEnterpriseIdentity(oidcConnection(), profile).subject, /^stigen-enterprise-v1\./);
+  t.throws(
+    () =>
+      buildEnterpriseIdentity(oidcConnection(), {
+        ...profile,
+        verifiedIdentity: { ...profile.verifiedIdentity, issuerTenantID: 'different-tenant' },
+      }),
     /does not match/
   );
   t.end();
@@ -146,6 +174,11 @@ tap.test('enterprise subject construction fails closed on missing provenance', (
       }),
     () => buildEnterpriseIdentity(oidcConnection(), oidcProfile('', 'subject-123')),
     () => buildEnterpriseIdentity(oidcConnection(), oidcProfile('https://issuer.example', '')),
+    () =>
+      buildEnterpriseIdentity(oidcConnection(), {
+        ...oidcProfile(),
+        verifiedIdentity: { ...oidcProfile().verifiedIdentity, configuredIssuer: '' },
+      }),
     () => buildEnterpriseIdentity(samlConnection(), { issuer: '', claims: { raw: { id: 'name-id' } } }),
     () => buildEnterpriseIdentity(samlConnection(), { issuer: 'https://idp.example', claims: { raw: {} } }),
     () => buildEnterpriseIdentity(samlConnection(), { ...samlProfile(), verifiedIdentity: undefined }),

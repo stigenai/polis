@@ -333,6 +333,8 @@ export type VerifiedUpstreamIdentity = {
   protocol: 'oidc' | 'saml';
   issuer: string;
   subject: string;
+  configuredIssuer?: string;
+  issuerTenantID?: string;
   subjectFormat?: string;
 };
 

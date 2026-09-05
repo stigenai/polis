@@ -1214,10 +1214,13 @@ export class OAuthController implements IOAuthController {
       isIdPFlow,
     };
 
-    // This is deliberately opt-in and limited to the ordinary IdP bridge path.
-    // Existing subjects and the separate SAML/OIDC identity-federation paths are
-    // unchanged until callers perform an explicit account-link migration.
-    if (this.opts.openid?.enterpriseSubjectV1 && isIdPFlow) {
+    // This is deliberately opt-in and limited to the ordinary SP-initiated IdP
+    // bridge path. Existing subjects, unsolicited SAML, and the separate
+    // SAML/OIDC identity-federation paths are unchanged until callers perform an
+    // explicit account-link migration.
+    const isEnterpriseBridgeFlow =
+      !!session && !session.samlFederated && !session.oidcFederated && !isIdPFlow;
+    if (this.opts.openid?.enterpriseSubjectV1 && isEnterpriseBridgeFlow) {
       codeVal['enterpriseIdentity'] = buildEnterpriseIdentity(connection, profile);
     }
 

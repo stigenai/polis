@@ -278,8 +278,8 @@ export const createOIDCUserProfile = (
 ) => {
   const issuer = typeof idTokenClaims.iss === 'string' ? idTokenClaims.iss : '';
   const subject = typeof idTokenClaims.sub === 'string' ? idTokenClaims.sub : '';
-  if (!issuer || issuer !== configuredIssuer || !subject) {
-    throw new Error('OIDC identity provenance does not match the validated provider');
+  if (!issuer || !configuredIssuer || !subject) {
+    throw new Error('OIDC identity provenance is missing');
   }
 
   const profile: {
@@ -289,7 +289,13 @@ export const createOIDCUserProfile = (
     claims: {},
     // Keep protocol provenance outside raw claims. Userinfo is profile data and
     // must never overwrite the issuer/subject authenticated by the ID token.
-    verifiedIdentity: { protocol: 'oidc', issuer, subject },
+    verifiedIdentity: {
+      protocol: 'oidc',
+      issuer,
+      subject,
+      configuredIssuer,
+      issuerTenantID: typeof idTokenClaims.tid === 'string' ? idTokenClaims.tid : undefined,
+    },
   };
 
   profile.claims.id = subject;

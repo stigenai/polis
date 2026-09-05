@@ -50,6 +50,13 @@ export function buildEnterpriseIdentity(
     }
     const upstreamIssuer = required('OIDC issuer', verified.issuer);
     const upstreamSubject = required('OIDC subject', verified.subject);
+    const configuredIssuer = required('configured OIDC issuer', verified.configuredIssuer);
+    const resolvedIssuer = configuredIssuer.includes('{tenantid}')
+      ? configuredIssuer.replace('{tenantid}', required('OIDC issuer tenant id', verified.issuerTenantID))
+      : configuredIssuer;
+    if (upstreamIssuer !== resolvedIssuer) {
+      throw new Error('Enterprise identity OIDC issuer does not match the resolved connection');
+    }
     return {
       version: 1,
       protocol: 'oidc',
