@@ -1,17 +1,7 @@
 import crypto from 'crypto';
 
-import type { OIDCSSORecord, SAMLSSORecord } from '../typings';
-
-export type EnterpriseIdentity = {
-  version: 1;
-  protocol: 'oidc' | 'saml';
-  organization: string;
-  connection: string;
-  upstreamIssuer: string;
-  upstreamSubject: string;
-  subjectFormat?: string;
-  subject: string;
-};
+import type { EnterpriseIdentity, OIDCSSORecord, SAMLSSORecord } from '../typings';
+export type { EnterpriseIdentity } from '../typings';
 
 function required(name: string, value: unknown): string {
   if (typeof value !== 'string' || value.length === 0 || value !== value.trim()) {
@@ -68,10 +58,9 @@ export function buildEnterpriseIdentity(
     };
   }
 
-  // saml20 currently returns a validated issuer and mapped NameID value, but not
-  // the signed assertion's actual NameID Format. A configured/requested format is
-  // not response evidence. Fail closed until the validator exposes a typed
-  // verifiedIdentity envelope equivalent to the OIDC path.
+  // The SAML adapter creates this envelope only from the signature-selected
+  // assertion's verifiedSubjectNameID and issuer. Configured/requested values or
+  // mapped AttributeStatement claims are not accepted as response provenance.
   const verified = profile?.verifiedIdentity;
   if (verified?.protocol !== 'saml') {
     throw new Error('Missing or invalid enterprise identity signed SAML NameID provenance');

@@ -327,6 +327,7 @@ export interface Profile {
   requested: Record<string, string>;
   raw: any;
   verifiedIdentity?: VerifiedUpstreamIdentity;
+  stigen_identity?: EnterpriseIdentity;
 }
 
 export type VerifiedUpstreamIdentity = {
@@ -336,6 +337,17 @@ export type VerifiedUpstreamIdentity = {
   configuredIssuer?: string;
   issuerTenantID?: string;
   subjectFormat?: string;
+};
+
+export type EnterpriseIdentity = {
+  version: 1;
+  protocol: 'oidc' | 'saml';
+  organization: string;
+  connection: string;
+  upstreamIssuer: string;
+  upstreamSubject: string;
+  subjectFormat?: string;
+  subject: string;
 };
 
 export interface Index {
