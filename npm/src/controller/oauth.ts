@@ -1328,7 +1328,7 @@ export class OAuthController implements IOAuthController {
         throw new JacksonError('Invalid code', 403);
       }
 
-      const codeVal = decrypt(encCodeVal, codes[0]);
+      let codeVal = decrypt(encCodeVal, codes[0]);
 
       if (!codeVal || !codeVal.profile) {
         throw new JacksonError('Invalid code', 403);
@@ -1415,6 +1415,19 @@ export class OAuthController implements IOAuthController {
         throw new JacksonError('Please specify client_secret or code_verifier', 401);
       }
 
+      // Validation deliberately happens before consumption so a malformed
+      // client request cannot burn a legitimate code. Atomic take is the
+      // issuance boundary: only its winner may mint and persist a token.
+      const validatedCode = JSON.stringify(codeVal);
+      const consumedCode = await this.codeStore.take(codes[1]);
+      if (!consumedCode) {
+        throw new JacksonError('Invalid code', 403);
+      }
+      codeVal = decrypt(consumedCode, codes[0]);
+      if (!codeVal?.profile || JSON.stringify(codeVal) !== validatedCode) {
+        throw new JacksonError('Invalid code', 403);
+      }
+
       // store details against a token
       const token = crypto.randomBytes(20).toString('hex');
 
@@ -1471,14 +1484,6 @@ export class OAuthController implements IOAuthController {
       const { hexKey, encVal } = encrypt(tokenVal);
 
       await this.tokenStore.put(token, encVal);
-
-      // delete the code
-      try {
-        await this.codeStore.delete(codes[1]);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      } catch (_err) {
-        // ignore error
-      }
 
       const tokenResponse: OAuthTokenRes = {
         access_token: hexKey + '.' + token,

@@ -203,6 +203,14 @@ class Mongo implements DatabaseDriver {
     });
   }
 
+  async take(namespace: string, key: string): Promise<any> {
+    const doc = await this.collection.findOneAndDelete({
+      _id: dbutils.key(namespace, key) as any,
+      $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }],
+    });
+    return doc?.value ?? null;
+  }
+
   async deleteMany(namespace: string, keys: string[]): Promise<void> {
     if (keys.length === 0) {
       return;

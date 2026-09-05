@@ -198,6 +198,20 @@ class Mem implements DatabaseDriver {
     delete this.ttlStore[k];
   }
 
+  async take(namespace: string, key: string): Promise<any> {
+    const k = dbutils.key(namespace, key);
+    const value = this.store[k];
+    if (!value) return null;
+    if (this.ttlStore[k]?.expiresAt < Date.now()) {
+      await this.delete(namespace, key);
+      return null;
+    }
+    // No await occurs between observing and deleting the value, so competing
+    // callers in this process cannot both claim it.
+    await this.delete(namespace, key);
+    return value;
+  }
+
   async deleteMany(namespace: string, keys: string[]): Promise<void> {
     if (keys.length === 0) {
       return;
