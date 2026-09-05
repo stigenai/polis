@@ -2,7 +2,6 @@ import crypto from 'crypto';
 
 import type { OIDCSSORecord, SAMLSSORecord } from '../typings';
 
-const samlNameIdentifierClaim = 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier';
 export type EnterpriseIdentity = {
   version: 1;
   protocol: 'oidc' | 'saml';
@@ -45,9 +44,12 @@ export function buildEnterpriseIdentity(
   const connectionID = required('connection', connection.clientID);
 
   if ('oidcProvider' in connection) {
-    const raw = profile?.claims?.raw;
-    const upstreamIssuer = required('OIDC issuer', raw?.iss);
-    const upstreamSubject = required('OIDC subject', raw?.sub);
+    const verified = profile?.verifiedIdentity;
+    if (verified?.protocol !== 'oidc') {
+      throw new Error('Missing or invalid enterprise identity OIDC provenance');
+    }
+    const upstreamIssuer = required('OIDC issuer', verified.issuer);
+    const upstreamSubject = required('OIDC subject', verified.subject);
     return {
       version: 1,
       protocol: 'oidc',
@@ -59,20 +61,22 @@ export function buildEnterpriseIdentity(
     };
   }
 
-  const raw = profile?.claims?.raw;
-  // Only a NameID/explicit id from the validated assertion is accepted. Polis's
-  // legacy sha256(email) fallback is intentionally excluded.
-  const nameID = raw?.id ?? raw?.[samlNameIdentifierClaim];
-  const upstreamSubject = required('SAML NameID', nameID);
-  const upstreamIssuer = required('SAML issuer', profile?.issuer);
-  const configuredIssuer = required('configured SAML issuer', connection.idpMetadata.entityID);
-  if (upstreamIssuer !== configuredIssuer) {
-    throw new Error('Enterprise identity SAML issuer does not match the resolved connection');
+  // saml20 currently returns a validated issuer and mapped NameID value, but not
+  // the signed assertion's actual NameID Format. A configured/requested format is
+  // not response evidence. Fail closed until the validator exposes a typed
+  // verifiedIdentity envelope equivalent to the OIDC path.
+  const verified = profile?.verifiedIdentity;
+  if (verified?.protocol !== 'saml') {
+    throw new Error('Missing or invalid enterprise identity signed SAML NameID provenance');
   }
-  // The current saml20 profile does not return the assertion's Format attribute.
-  // Require the explicit server-side connection format rather than silently
-  // applying Polis's legacy emailAddress default.
-  const subjectFormat = required('SAML NameID format', connection.identifierFormat);
+  const upstreamSubject = required('SAML NameID', verified.subject);
+  const upstreamIssuer = required('SAML issuer', verified.issuer);
+  const subjectFormat = required('SAML NameID format', verified.subjectFormat);
+  const configuredIssuer = required('configured SAML issuer', connection.idpMetadata.entityID);
+  const configuredFormat = required('configured SAML NameID format', connection.identifierFormat);
+  if (upstreamIssuer !== configuredIssuer || subjectFormat !== configuredFormat) {
+    throw new Error('Enterprise identity SAML provenance does not match the resolved connection');
+  }
   return {
     version: 1,
     protocol: 'saml',

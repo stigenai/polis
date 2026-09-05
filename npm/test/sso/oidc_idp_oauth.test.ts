@@ -1,6 +1,6 @@
 import tap from 'tap';
 import * as utils from '../../src/controller/utils';
-import { IConnectionAPIController, IOAuthController, OAuthReq, Profile } from '../../src/typings';
+import { IConnectionAPIController, IOAuthController, OAuthReq } from '../../src/typings';
 import {
   authz_request_oidc_provider,
   GENERIC_ERR_STRING,
@@ -49,7 +49,9 @@ tap.before(async () => {
       const client = openIdClientMock as typeof import('openid-client');
       openIdClientMock.fetchUserInfo = async () => {
         return {
-          sub: 'USER_IDENTIFIER',
+          // Adversarial profile claims must not replace ID-token provenance.
+          iss: 'https://userinfo-attacker.example.com',
+          sub: 'USERINFO_IDENTIFIER',
           email: 'jackson@example.com',
           given_name: 'jackson',
           family_name: 'samuel',
@@ -59,19 +61,12 @@ tap.before(async () => {
       };
       const userinfo = await client.fetchUserInfo(oidcConfig, tokens.access_token, idTokenClaims.sub);
 
-      const profile: { claims: Partial<Profile & { raw: Record<string, unknown> }> } = { claims: {} };
-
-      profile.claims.id = idTokenClaims.sub;
-      profile.claims.email = typeof idTokenClaims.email === 'string' ? idTokenClaims.email : userinfo.email;
-      profile.claims.firstName =
-        typeof idTokenClaims.given_name === 'string' ? idTokenClaims.given_name : userinfo.given_name;
-      profile.claims.lastName =
-        typeof idTokenClaims.family_name === 'string' ? idTokenClaims.family_name : userinfo.family_name;
-      profile.claims.roles = idTokenClaims.roles ?? (userinfo.roles as any);
-      profile.claims.groups = idTokenClaims.groups ?? (userinfo.groups as any);
-      profile.claims.raw = { ...idTokenClaims, ...userinfo };
-
-      return profile;
+      return utils.createOIDCUserProfile(
+        idTokenClaims as Record<string, unknown>,
+        userinfo as Record<string, unknown>,
+        oidcConfig.serverMetadata().issuer,
+        tokens
+      );
     },
   });
 
@@ -235,6 +230,7 @@ tap.test('[OIDCProvider]', async (t) => {
   t.test(
     '[oidcAuthzResponse] Should return the client redirect url with code and original state attached',
     async (t) => {
+      (oauthController as any).opts.openid.enterpriseSubjectV1 = true;
       // let capturedArgs: any;
       openIdClientMock.authorizationCodeGrant = async () => {
         return {
@@ -246,7 +242,7 @@ tap.test('[OIDCProvider]', async (t) => {
             email: 'jackson@example.com',
             given_name: 'jackson',
             family_name: 'samuel',
-            iss: 'https://issuer.example.com',
+            iss: 'https://accounts.google.com',
             aud: 'https://audience.example.com',
             iat: 1643723400,
             exp: 1643727000,

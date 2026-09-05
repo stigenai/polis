@@ -1,6 +1,7 @@
 import tap from 'tap';
 
 import { buildEnterpriseIdentity } from '../../src/controller/enterprise-subject';
+import { createOIDCUserProfile } from '../../src/controller/utils';
 import type { OIDCSSORecord, SAMLSSORecord } from '../../src/typings';
 
 const oidcConnection = (overrides: Partial<OIDCSSORecord> = {}): OIDCSSORecord =>
@@ -16,6 +17,7 @@ const oidcConnection = (overrides: Partial<OIDCSSORecord> = {}): OIDCSSORecord =
   }) as OIDCSSORecord;
 
 const oidcProfile = (issuer = 'https://issuer.example', subject = 'subject-123') => ({
+  verifiedIdentity: { protocol: 'oidc', issuer, subject },
   claims: { raw: { iss: issuer, sub: subject, email: 'shared@example.com' } },
 });
 
@@ -40,6 +42,12 @@ const samlConnection = (overrides: Partial<SAMLSSORecord> = {}): SAMLSSORecord =
 
 const samlProfile = (issuer = 'https://saml-idp.example/entity', nameID = 'subject-123') => ({
   issuer,
+  verifiedIdentity: {
+    protocol: 'saml',
+    issuer,
+    subject: nameID,
+    subjectFormat: 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent',
+  },
   claims: {
     id: nameID,
     email: 'shared@example.com',
@@ -65,6 +73,37 @@ tap.test('OIDC enterprise subjects bind exact trusted provenance', (t) => {
   t.end();
 });
 
+tap.test('userinfo cannot overwrite validated OIDC provenance', (t) => {
+  const profile = createOIDCUserProfile(
+    { iss: 'https://issuer.example', sub: 'validated-subject', email: 'validated@example.com' },
+    { iss: 'https://attacker.example', sub: 'attacker-subject', email: 'profile@example.com' },
+    'https://issuer.example'
+  );
+  t.same(profile.verifiedIdentity, {
+    protocol: 'oidc',
+    issuer: 'https://issuer.example',
+    subject: 'validated-subject',
+  });
+  // Raw remains backwards-compatible profile material and demonstrates why it
+  // is not an authentication provenance source.
+  t.equal(profile.claims.raw?.iss, 'https://attacker.example');
+  t.equal(profile.claims.raw?.sub, 'attacker-subject');
+
+  const identity = buildEnterpriseIdentity(oidcConnection(), profile);
+  t.equal(identity.upstreamIssuer, 'https://issuer.example');
+  t.equal(identity.upstreamSubject, 'validated-subject');
+  t.throws(
+    () =>
+      createOIDCUserProfile(
+        { iss: 'https://issuer.example/', sub: 'validated-subject' },
+        {},
+        'https://issuer.example'
+      ),
+    /does not match/
+  );
+  t.end();
+});
+
 tap.test('SAML enterprise subjects bind issuer, NameID, and configured format', (t) => {
   const base = buildEnterpriseIdentity(samlConnection(), samlProfile());
   const variants = [
@@ -81,7 +120,13 @@ tap.test('SAML enterprise subjects bind issuer, NameID, and configured format', 
     ),
     buildEnterpriseIdentity(
       samlConnection({ identifierFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress' }),
-      samlProfile()
+      {
+        ...samlProfile(),
+        verifiedIdentity: {
+          ...samlProfile().verifiedIdentity,
+          subjectFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+        },
+      }
     ),
     buildEnterpriseIdentity(samlConnection(), samlProfile(undefined, 'subject-456')),
   ];
@@ -95,12 +140,20 @@ tap.test('enterprise subject construction fails closed on missing provenance', (
   const cases: Array<() => unknown> = [
     () => buildEnterpriseIdentity(oidcConnection({ tenant: '' }), oidcProfile()),
     () => buildEnterpriseIdentity(oidcConnection({ clientID: '' }), oidcProfile()),
+    () =>
+      buildEnterpriseIdentity(oidcConnection(), {
+        claims: { raw: { iss: 'https://issuer.example', sub: 'subject-123' } },
+      }),
     () => buildEnterpriseIdentity(oidcConnection(), oidcProfile('', 'subject-123')),
     () => buildEnterpriseIdentity(oidcConnection(), oidcProfile('https://issuer.example', '')),
     () => buildEnterpriseIdentity(samlConnection(), { issuer: '', claims: { raw: { id: 'name-id' } } }),
     () => buildEnterpriseIdentity(samlConnection(), { issuer: 'https://idp.example', claims: { raw: {} } }),
-    () => buildEnterpriseIdentity(samlConnection(), samlProfile('https://wrong-idp.example/entity')),
-    () => buildEnterpriseIdentity(samlConnection({ identifierFormat: '' }), samlProfile()),
+    () => buildEnterpriseIdentity(samlConnection(), { ...samlProfile(), verifiedIdentity: undefined }),
+    () =>
+      buildEnterpriseIdentity(samlConnection(), {
+        ...samlProfile(),
+        verifiedIdentity: { ...samlProfile().verifiedIdentity, subjectFormat: '' },
+      }),
   ];
   for (const run of cases) {
     t.throws(run, /(Missing or invalid enterprise identity|does not match the resolved connection)/);

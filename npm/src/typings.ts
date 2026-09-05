@@ -326,7 +326,15 @@ export interface Profile {
   groups?: string[];
   requested: Record<string, string>;
   raw: any;
+  verifiedIdentity?: VerifiedUpstreamIdentity;
 }
+
+export type VerifiedUpstreamIdentity = {
+  protocol: 'oidc' | 'saml';
+  issuer: string;
+  subject: string;
+  subjectFormat?: string;
+};
 
 export interface Index {
   name: string;
