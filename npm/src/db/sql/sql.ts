@@ -355,6 +355,54 @@ class Sql implements DatabaseDriver {
     });
   }
 
+  async take(namespace: string, key: string): Promise<any> {
+    const dbKey = dbutils.key(namespace, key);
+
+    if (this.options.type !== 'sqlite') {
+      return this.dataSource.transaction(async (transactionalEntityManager) => {
+        const value: any = await transactionalEntityManager.findOne(this.JacksonStore, {
+          where: { key: dbKey },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!value) return null;
+
+        const ttl: any = await transactionalEntityManager.findOneBy(this.JacksonTTL, { key: dbKey });
+        const expired = ttl && Number(ttl.expiresAt) < Date.now();
+
+        await transactionalEntityManager.delete(this.JacksonTTL, { key: dbKey });
+        if (this.options.engine === 'planetscale') {
+          await transactionalEntityManager.delete(this.JacksonIndex, { storeKey: dbKey });
+        }
+        await transactionalEntityManager.delete(this.JacksonStore, { key: dbKey });
+        if (expired) return null;
+        return { value: value.value, iv: value.iv, tag: value.tag };
+      });
+    }
+
+    const value = await this.storeRepository.findOneBy({ key: dbKey });
+    if (!value) return null;
+    const ttl = await this.ttlRepository.findOneBy({ key: dbKey });
+    const expired = ttl && Number(ttl.expiresAt) < Date.now();
+
+    // Include the observed payload in the delete predicate. A concurrent
+    // replacement under the same key must not let this caller return stale
+    // data while deleting the replacement.
+    const deleted = await this.storeRepository.delete({
+      key: dbKey,
+      value: value.value,
+      iv: value.iv ?? IsNull(),
+      tag: value.tag ?? IsNull(),
+    });
+    if (deleted.affected !== 1) return null;
+
+    await this.ttlRepository.delete({ key: dbKey });
+    if (this.options.engine === 'planetscale') {
+      await this.indexRepository.delete({ storeKey: dbKey });
+    }
+    if (expired) return null;
+    return { value: value.value, iv: value.iv, tag: value.tag };
+  }
+
   async deleteMany(namespace: string, keys: string[]): Promise<void> {
     if (keys.length === 0) {
       return;

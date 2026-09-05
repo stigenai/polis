@@ -16,6 +16,10 @@ class Store implements Storable {
     return await this.db.get(this.namespace, dbutils.keyDigest(key));
   }
 
+  async take(key: string): Promise<any> {
+    return await this.db.take(this.namespace, dbutils.keyDigest(key));
+  }
+
   async getAll(
     pageOffset?: number,
     pageLimit?: number,

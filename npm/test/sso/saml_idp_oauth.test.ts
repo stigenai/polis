@@ -13,6 +13,7 @@ import sinon from 'sinon';
 import tap from 'tap';
 import { JacksonError } from '../../src/controller/error';
 import saml from '@boxyhq/saml20';
+import * as encrypter from '../../src/db/encrypter';
 import {
   authz_request_normal,
   authz_request_with_forceauthn,
@@ -96,6 +97,29 @@ function stubRandomBytesAll() {
     .returns(genKey as any)
     .onCall(5)
     .returns(iv as any);
+}
+
+async function issueSamlAuthorizationCode(authBody: OAuthReq = authz_request_normal): Promise<string> {
+  const { redirect_url } = (await oauthController.authorize(authBody)) as { redirect_url: string };
+  const relayState = new URLSearchParams(new URL(redirect_url).search).get('RelayState');
+  const rawResponse = await fs.readFile(path.join(__dirname, '/data/saml_response'), 'utf8');
+  const stubValidate = sinon.stub(saml, 'validate').resolves({
+    audience: '',
+    claims: { id: 'atomic-code-user', email: 'atomic@example.test' },
+    issuer: '',
+    sessionIndex: '',
+  });
+  try {
+    const response = await oauthController.samlResponse({
+      SAMLResponse: rawResponse,
+      RelayState: relayState,
+    });
+    const issuedCode = new URLSearchParams(new URL(response.redirect_url!).search).get('code');
+    if (!issuedCode) throw new Error('authorization response omitted code');
+    return issuedCode;
+  } finally {
+    stubValidate.restore();
+  }
 }
 
 tap.before(async () => {
@@ -399,6 +423,79 @@ tap.test('samlResponse()', async (t) => {
 
 tap.test('token()', async (t) => {
   const jose = await import('jose');
+
+  t.test('atomically permits only one parallel exchange and rejects replay', async (t) => {
+    const issuedCode = await issueSamlAuthorizationCode();
+    const request = <OAuthTokenReq>{ ...token_req_encoded_client_id, code: issuedCode };
+    const results = await Promise.allSettled([
+      oauthController.token(request),
+      oauthController.token(request),
+    ]);
+
+    t.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    t.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    await t.rejects(oauthController.token(request), { message: 'Invalid code', statusCode: 403 });
+  });
+
+  t.test('does not consume on failed client authentication', async (t) => {
+    const issuedCode = await issueSamlAuthorizationCode();
+    const request = <OAuthTokenReq>{ ...token_req_encoded_client_id, code: issuedCode };
+
+    await t.rejects(oauthController.token({ ...request, client_secret: 'wrong-secret' }), {
+      statusCode: 401,
+    });
+    const response = await oauthController.token(request);
+    t.ok(response.access_token, 'valid retry receives a token');
+  });
+
+  t.test('rejects a code replaced after validation before persisting a token', async (t) => {
+    const issuedCode = await issueSamlAuthorizationCode();
+    const [hexKey] = issuedCode.split('.');
+    const request = <OAuthTokenReq>{ ...token_req_encoded_client_id, code: issuedCode };
+    const controller = oauthController as any;
+    const originalTake = controller.codeStore.take.bind(controller.codeStore);
+    const tokenPut = sinon.spy(controller.tokenStore, 'put');
+    const take = sinon.stub(controller.codeStore, 'take').callsFake(async (key: string) => {
+      const stored = await controller.codeStore.get(key);
+      const cleartext = encrypter.decrypt(stored.value, stored.iv, stored.tag, Buffer.from(hexKey, 'hex'));
+      const replacement = JSON.parse(cleartext);
+      replacement.profile.claims.id = 'replacement-user';
+      await controller.codeStore.put(
+        key,
+        encrypter.encrypt(JSON.stringify(replacement), Buffer.from(hexKey, 'hex'))
+      );
+      return originalTake(key);
+    });
+
+    try {
+      await t.rejects(oauthController.token(request), { message: 'Invalid code', statusCode: 403 });
+      t.equal(tokenPut.callCount, 0, 'no token is persisted for a replaced code');
+    } finally {
+      take.restore();
+      tokenPut.restore();
+    }
+  });
+
+  t.test('fails closed when consumption is ambiguous and never reuses the code', async (t) => {
+    const issuedCode = await issueSamlAuthorizationCode();
+    const request = <OAuthTokenReq>{ ...token_req_encoded_client_id, code: issuedCode };
+    const controller = oauthController as any;
+    const originalTake = controller.codeStore.take.bind(controller.codeStore);
+    const tokenPut = sinon.spy(controller.tokenStore, 'put');
+    const take = sinon.stub(controller.codeStore, 'take').callsFake(async (key: string) => {
+      await originalTake(key);
+      throw new Error('ambiguous consume failure');
+    });
+
+    try {
+      await t.rejects(oauthController.token(request), { message: 'ambiguous consume failure' });
+      t.equal(tokenPut.callCount, 0, 'no token is persisted after a consume error');
+    } finally {
+      take.restore();
+      tokenPut.restore();
+    }
+    await t.rejects(oauthController.token(request), { message: 'Invalid code', statusCode: 403 });
+  });
   t.test('Should throw an error if `grant_type` is not `authorization_code`', async (t) => {
     const body = {
       grant_type: 'authorization_code_1',
