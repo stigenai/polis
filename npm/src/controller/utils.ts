@@ -269,6 +269,70 @@ export const extractHostName = (url: string): string | null => {
 
 export type AuthorizationCodeGrantResult = Awaited<ReturnType<typeof authorizationCodeGrant>>;
 
+export const createOIDCUserProfile = (
+  idTokenClaims: Record<string, unknown>,
+  userinfo: Record<string, unknown>,
+  configuredIssuer: string,
+  tokens?: AuthorizationCodeGrantResult,
+  includeTokens: boolean = false
+) => {
+  const issuer = typeof idTokenClaims.iss === 'string' ? idTokenClaims.iss : '';
+  const subject = typeof idTokenClaims.sub === 'string' ? idTokenClaims.sub : '';
+  if (!issuer || !configuredIssuer || !subject) {
+    throw new Error('OIDC identity provenance is missing');
+  }
+
+  const profile: {
+    claims: Partial<Profile & { raw: Record<string, unknown> }>;
+    verifiedIdentity: NonNullable<Profile['verifiedIdentity']>;
+  } = {
+    claims: {},
+    // Keep protocol provenance outside raw claims. Userinfo is profile data and
+    // must never overwrite the issuer/subject authenticated by the ID token.
+    verifiedIdentity: {
+      protocol: 'oidc',
+      issuer,
+      subject,
+      configuredIssuer,
+      issuerTenantID: typeof idTokenClaims.tid === 'string' ? idTokenClaims.tid : undefined,
+    },
+  };
+
+  profile.claims.id = subject;
+  profile.claims.email =
+    typeof idTokenClaims.email === 'string'
+      ? idTokenClaims.email
+      : typeof userinfo.email === 'string'
+        ? userinfo.email
+        : undefined;
+  profile.claims.firstName =
+    typeof idTokenClaims.given_name === 'string'
+      ? idTokenClaims.given_name
+      : typeof userinfo.given_name === 'string'
+        ? userinfo.given_name
+        : undefined;
+  profile.claims.lastName =
+    typeof idTokenClaims.family_name === 'string'
+      ? idTokenClaims.family_name
+      : typeof userinfo.family_name === 'string'
+        ? userinfo.family_name
+        : undefined;
+  profile.claims.roles = idTokenClaims.roles ?? (userinfo.roles as any);
+  profile.claims.groups = idTokenClaims.groups ?? (userinfo.groups as any);
+
+  const rawClaims: Record<string, unknown> = { ...idTokenClaims, ...userinfo };
+  if (includeTokens && tokens) {
+    rawClaims.id_token = tokens.id_token;
+    rawClaims.access_token = tokens.access_token;
+    rawClaims.refresh_token = tokens.refresh_token;
+    rawClaims.token_type = tokens.token_type;
+    rawClaims.expires_at = tokens.expires_at;
+    rawClaims.scope = tokens.scope;
+  }
+  profile.claims.raw = rawClaims;
+  return profile;
+};
+
 export const extractOIDCUserProfile = async (
   tokens: AuthorizationCodeGrantResult,
   oidcConfig: Configuration,
@@ -277,37 +341,13 @@ export const extractOIDCUserProfile = async (
   const idTokenClaims = tokens.claims()!;
   const client = (await dynamicImport('openid-client')) as typeof import('openid-client');
   const userinfo = await client.fetchUserInfo(oidcConfig, tokens.access_token, idTokenClaims.sub);
-
-  const profile: { claims: Partial<Profile & { raw: Record<string, unknown> }> } = { claims: {} };
-
-  profile.claims.id = idTokenClaims.sub;
-  profile.claims.email = typeof idTokenClaims.email === 'string' ? idTokenClaims.email : userinfo.email;
-  profile.claims.firstName =
-    typeof idTokenClaims.given_name === 'string' ? idTokenClaims.given_name : userinfo.given_name;
-  profile.claims.lastName =
-    typeof idTokenClaims.family_name === 'string' ? idTokenClaims.family_name : userinfo.family_name;
-  profile.claims.roles = idTokenClaims.roles ?? (userinfo.roles as any);
-  profile.claims.groups = idTokenClaims.groups ?? (userinfo.groups as any);
-
-  const rawClaims: Record<string, unknown> = {
-    ...idTokenClaims,
-    ...userinfo,
-  };
-
-  // Conditionally include the raw tokens from Hydra OIDC response as top-level
-  // SAML attributes so that standard SP frameworks can parse them out of the box.
-  if (includeTokens) {
-    rawClaims.id_token = tokens.id_token;
-    rawClaims.access_token = tokens.access_token;
-    rawClaims.refresh_token = tokens.refresh_token;
-    rawClaims.token_type = tokens.token_type;
-    rawClaims.expires_at = tokens.expires_at;
-    rawClaims.scope = tokens.scope;
-  }
-
-  profile.claims.raw = rawClaims;
-
-  return profile;
+  return createOIDCUserProfile(
+    idTokenClaims as Record<string, unknown>,
+    userinfo as Record<string, unknown>,
+    oidcConfig.serverMetadata().issuer,
+    tokens,
+    includeTokens
+  );
 };
 
 export const getScopeValues = (scope?: string): string[] => {

@@ -326,7 +326,17 @@ export interface Profile {
   groups?: string[];
   requested: Record<string, string>;
   raw: any;
+  verifiedIdentity?: VerifiedUpstreamIdentity;
 }
+
+export type VerifiedUpstreamIdentity = {
+  protocol: 'oidc' | 'saml';
+  issuer: string;
+  subject: string;
+  configuredIssuer?: string;
+  issuerTenantID?: string;
+  subjectFormat?: string;
+};
 
 export interface Index {
   name: string;
@@ -442,6 +452,7 @@ export interface JacksonOption {
     requestProfileScope?: boolean; // defaults to true
     forwardOIDCParams?: boolean; // defaults to false
     subjectPrefix?: boolean; // defaults to false
+    enterpriseSubjectV1?: boolean; // defaults to false; opt-in migration boundary
     redirectExactMatch?: boolean; // defaults to false
   };
   certs?: { publicKey: string; privateKey: string };

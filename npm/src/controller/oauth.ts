@@ -45,6 +45,7 @@ import { JacksonError } from './error';
 import * as allowed from './oauth/allowed';
 import * as codeVerifier from './oauth/code-verifier';
 import * as redirect from './oauth/redirect';
+import { buildEnterpriseIdentity } from './enterprise-subject';
 import { getDefaultCertificate } from '../saml/x509';
 import { SSOHandler } from './sso-handler';
 import { ValidateOption, extractSAMLResponseAttributes } from '../saml/lib';
@@ -1213,6 +1214,16 @@ export class OAuthController implements IOAuthController {
       isIdPFlow,
     };
 
+    // This is deliberately opt-in and limited to the ordinary SP-initiated IdP
+    // bridge path. Existing subjects, unsolicited SAML, and the separate
+    // SAML/OIDC identity-federation paths are unchanged until callers perform an
+    // explicit account-link migration.
+    const isEnterpriseBridgeFlow =
+      !!session && !session.samlFederated && !session.oidcFederated && !isIdPFlow;
+    if (this.opts.openid?.enterpriseSubjectV1 && isEnterpriseBridgeFlow) {
+      codeVal['enterpriseIdentity'] = buildEnterpriseIdentity(connection, profile);
+    }
+
     if (session) {
       codeVal['session'] = session;
     }
@@ -1445,7 +1456,11 @@ export class OAuthController implements IOAuthController {
       };
 
       let subject = codeVal.profile.claims.id;
-      if (this.opts.openid?.subjectPrefix) {
+      if (codeVal.enterpriseIdentity) {
+        subject = codeVal.enterpriseIdentity.subject;
+        codeVal.profile.claims.stigen_identity = codeVal.enterpriseIdentity;
+        tokenVal['enterpriseIdentity'] = codeVal.enterpriseIdentity;
+      } else if (this.opts.openid?.subjectPrefix) {
         subject =
           codeVal.requested?.tenant + ':' + codeVal.requested?.product + ':' + codeVal.profile.claims.id;
         if (subject.length > 255) {

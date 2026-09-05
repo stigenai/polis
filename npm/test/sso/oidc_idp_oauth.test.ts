@@ -1,11 +1,13 @@
 import tap from 'tap';
+import * as jose from 'jose';
 import * as utils from '../../src/controller/utils';
-import { IConnectionAPIController, IOAuthController, OAuthReq, Profile } from '../../src/typings';
+import { IConnectionAPIController, IOAuthController, OAuthReq, OAuthTokenReq } from '../../src/typings';
 import {
   authz_request_oidc_provider,
   GENERIC_ERR_STRING,
   oidc_response,
   oidc_response_with_error,
+  oidc_connection,
 } from './fixture';
 import { JacksonError } from '../../src/controller/error';
 import { addSSOConnections, jacksonOptions } from '../utils';
@@ -49,7 +51,9 @@ tap.before(async () => {
       const client = openIdClientMock as typeof import('openid-client');
       openIdClientMock.fetchUserInfo = async () => {
         return {
-          sub: 'USER_IDENTIFIER',
+          // Adversarial profile claims must not replace ID-token provenance.
+          iss: 'https://userinfo-attacker.example.com',
+          sub: 'USERINFO_IDENTIFIER',
           email: 'jackson@example.com',
           given_name: 'jackson',
           family_name: 'samuel',
@@ -59,19 +63,12 @@ tap.before(async () => {
       };
       const userinfo = await client.fetchUserInfo(oidcConfig, tokens.access_token, idTokenClaims.sub);
 
-      const profile: { claims: Partial<Profile & { raw: Record<string, unknown> }> } = { claims: {} };
-
-      profile.claims.id = idTokenClaims.sub;
-      profile.claims.email = typeof idTokenClaims.email === 'string' ? idTokenClaims.email : userinfo.email;
-      profile.claims.firstName =
-        typeof idTokenClaims.given_name === 'string' ? idTokenClaims.given_name : userinfo.given_name;
-      profile.claims.lastName =
-        typeof idTokenClaims.family_name === 'string' ? idTokenClaims.family_name : userinfo.family_name;
-      profile.claims.roles = idTokenClaims.roles ?? (userinfo.roles as any);
-      profile.claims.groups = idTokenClaims.groups ?? (userinfo.groups as any);
-      profile.claims.raw = { ...idTokenClaims, ...userinfo };
-
-      return profile;
+      return utils.createOIDCUserProfile(
+        idTokenClaims as Record<string, unknown>,
+        userinfo as Record<string, unknown>,
+        oidcConfig.serverMetadata().issuer,
+        tokens
+      );
     },
   });
 
@@ -235,6 +232,7 @@ tap.test('[OIDCProvider]', async (t) => {
   t.test(
     '[oidcAuthzResponse] Should return the client redirect url with code and original state attached',
     async (t) => {
+      (oauthController as any).opts.openid.enterpriseSubjectV1 = true;
       // let capturedArgs: any;
       openIdClientMock.authorizationCodeGrant = async () => {
         return {
@@ -246,7 +244,7 @@ tap.test('[OIDCProvider]', async (t) => {
             email: 'jackson@example.com',
             given_name: 'jackson',
             family_name: 'samuel',
-            iss: 'https://issuer.example.com',
+            iss: 'https://accounts.google.com',
             aud: 'https://audience.example.com',
             iat: 1643723400,
             exp: 1643727000,
@@ -263,6 +261,32 @@ tap.test('[OIDCProvider]', async (t) => {
 
       t.ok(response_params.has('code'), 'code missing in redirect_url');
       t.match(response_params.get('state'), authz_request_oidc_provider.state);
+
+      const code = response_params.get('code')!;
+      const connection = (
+        await connectionAPIController.getConnections({
+          tenant: oidc_connection.tenant,
+          product: oidc_connection.product,
+        })
+      )[0];
+      const keyPair = await jose.generateKeyPair('RS256', { extractable: true });
+      (oauthController as any).opts.openid.jwtSigningKeys = {
+        private: Buffer.from(await jose.exportPKCS8(keyPair.privateKey)).toString('base64'),
+        public: Buffer.from(await jose.exportSPKI(keyPair.publicKey)).toString('base64'),
+      };
+      const token = await oauthController.token(<OAuthTokenReq>{
+        grant_type: 'authorization_code',
+        code,
+        client_id: connection.clientID,
+        client_secret: connection.clientSecret,
+        redirect_uri: oidc_connection.defaultRedirectUrl,
+      });
+      const bridgedProfile = await oauthController.userInfo(token.access_token);
+      t.match(bridgedProfile.sub, /^stigen-enterprise-v1\./);
+      t.equal((bridgedProfile as any).stigen_identity.upstreamIssuer, 'https://accounts.google.com');
+      t.equal((bridgedProfile as any).stigen_identity.upstreamSubject, 'USER_IDENTIFIER');
+      t.equal(bridgedProfile.raw.iss, 'https://userinfo-attacker.example.com');
+      t.equal(bridgedProfile.raw.sub, 'USERINFO_IDENTIFIER');
     }
   );
 });
